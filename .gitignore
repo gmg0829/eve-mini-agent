@@ -1,0 +1,8 @@
+node_modules
+.eve
+.env
+.workflow-data
+.nitro
+.output
+.vercel
+.env*

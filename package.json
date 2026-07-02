@@ -1,0 +1,29 @@
+{
+  "name": "eve-mini-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "eve dev",
+    "build": "eve build",
+    "start": "eve start",
+    "postinstall": "node scripts/patch-nf3.mjs",
+    "patch:fix-nf3": "node scripts/patch-nf3.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.4",
+    "@mozilla/readability": "^0.6.0",
+    "eve": "0.17.1",
+    "jsdom": "^29.1.1",
+    "turndown": "^7.2.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "just-bash": "^3.0.2",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

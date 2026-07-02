@@ -1,0 +1,1230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>eve-mini-agent · minimax</title>
+<style>
+  /* ===== Geist-inspired design tokens ===== */
+  :root {
+    /* Light theme */
+    --bg: #fafafa;
+    --bg-elev: #ffffff;
+    --bg-hover: #f4f4f5;
+    --fg: #0a0a0a;
+    --fg-muted: #71717a;
+    --fg-subtle: #a1a1aa;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --accent: #0070f3;
+    --accent-fg: #ffffff;
+    --accent-hover: #005bc5;
+    --bubble-user: #0070f3;
+    --bubble-user-fg: #ffffff;
+    --bubble-bot: #ffffff;
+    --bubble-bot-fg: #0a0a0a;
+    --tool-bg: #f4f4f5;
+    --tool-border: #e4e4e7;
+    --tool-fg: #52525b;
+    --code-bg: #18181b;
+    --code-fg: #fafafa;
+    --success: #008a05;
+    --error: #e00000;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 12px 32px rgba(0,0,0,0.10);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 18px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Menlo", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b;
+      --bg-elev: #111113;
+      --bg-hover: #1c1c1f;
+      --fg: #fafafa;
+      --fg-muted: #a1a1aa;
+      --fg-subtle: #71717a;
+      --border: #27272a;
+      --border-strong: #3f3f46;
+      --accent: #3b9eff;
+      --accent-fg: #09090b;
+      --accent-hover: #62b1ff;
+      --bubble-user: #3b9eff;
+      --bubble-user-fg: #09090b;
+      --bubble-bot: #1c1c1f;
+      --bubble-bot-fg: #fafafa;
+      --tool-bg: #18181b;
+      --tool-border: #27272a;
+      --tool-fg: #a1a1aa;
+      --code-bg: #fafafa;
+      --code-fg: #18181b;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+      --shadow-lg: 0 12px 32px rgba(0,0,0,0.5);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.6 var(--font);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    display: flex;
+    flex-direction: column;
+    overscroll-behavior: none;
+  }
+
+  /* ===== Header ===== */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .logo {
+    width: 28px; height: 28px; border-radius: var(--radius-md);
+    background: linear-gradient(135deg, #0070f3 0%, #7928ca 50%, #ff0080 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .title { display: flex; flex-direction: column; line-height: 1.25; }
+  .title b { font-size: 14px; font-weight: 600; }
+  .title span { font-size: 12px; color: var(--fg-muted); font-family: var(--font-mono); }
+  .status {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--fg-muted);
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+  }
+  .status .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--fg-subtle);
+    transition: background 0.2s;
+  }
+  .status[data-s="ready"] .dot { background: var(--success); }
+  .status[data-s="thinking"], .status[data-s="streaming"], .status[data-s="tools"] {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+  }
+  .status[data-s="thinking"] .dot, .status[data-s="streaming"] .dot, .status[data-s="tools"] .dot {
+    background: var(--accent-fg);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .status[data-s="err"] { background: var(--error); color: #fff; border-color: var(--error); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+  /* ===== Chat area ===== */
+  #log {
+    flex: 1; overflow-y: auto;
+    padding: 32px 20px 32px;
+    display: flex; flex-direction: column; gap: 18px;
+    scroll-behavior: smooth;
+  }
+  .row { display: flex; gap: 12px; max-width: 800px; width: 100%; margin: 0 auto; }
+  .row.user { justify-content: flex-end; }
+  .row.assistant { justify-content: flex-start; }
+  .row.tool { justify-content: center; }
+
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+    box-shadow: var(--shadow-sm);
+  }
+  .row.assistant .avatar {
+    background: linear-gradient(135deg, #0070f3 0%, #7928ca 100%);
+    color: #fff;
+  }
+  .row.user .avatar { background: var(--bg-hover); color: var(--fg); border: 1px solid var(--border); }
+
+  .bubble {
+    padding: 12px 16px;
+    border-radius: var(--radius-lg);
+    max-width: 75%;
+    white-space: pre-wrap; word-wrap: break-word;
+    box-shadow: var(--shadow-sm);
+    font-size: 15px; line-height: 1.6;
+  }
+  .row.user .bubble {
+    background: var(--bubble-user);
+    color: var(--bubble-user-fg);
+    border-bottom-right-radius: 4px;
+  }
+  .row.assistant .bubble {
+    background: var(--bubble-bot);
+    color: var(--bubble-bot-fg);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .row.assistant .bubble.streaming::after {
+    content: '▍';
+    display: inline-block;
+    color: var(--fg-muted);
+    margin-left: 2px;
+    animation: blink 0.8s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0 } }
+
+  .bubble code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--bg-hover);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+  }
+  .bubble pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    margin: 8px 0;
+  }
+
+  /* Tool call card */
+  .tool-card {
+    max-width: 800px; width: 100%;
+    background: var(--tool-bg);
+    border: 1px solid var(--tool-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--tool-fg);
+  }
+  .tool-card .head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.03);
+    border-bottom: 1px solid var(--tool-border);
+  }
+  @media (prefers-color-scheme: dark) { .tool-card .head { background: rgba(255,255,255,0.03); } }
+  .tool-card .head .icon {
+    width: 14px; height: 14px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .tool-card .head .name { color: var(--fg); font-weight: 600; }
+  .tool-card .head .arrow { margin-left: auto; color: var(--fg-subtle); }
+  .tool-card .body { padding: 8px 12px; }
+  .tool-card .body .row { display: block; padding: 0; max-width: 100%; margin: 0; }
+  .tool-card .body .label { color: var(--fg-subtle); margin-right: 6px; }
+  .tool-card .body .val { color: var(--fg); }
+  .tool-card.collapsed .body { display: none; }
+  .tool-card .head .verb { color: var(--fg-muted); font-weight: 500; }
+  .tool-card .head .name { color: var(--fg); font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool-card .head .status { font-size: 13px; font-weight: 700; }
+  .tool-card .head .status.ok { color: var(--success); }
+  .tool-card .head .status.err { color: var(--error); }
+  .tool-card .body details.raw { margin: 0 0 6px; }
+  .tool-card .body details.raw summary { cursor: pointer; color: var(--fg-subtle); font-size: 11px; user-select: none; }
+  .tool-card .body details.raw pre { margin: 4px 0 0; padding: 6px 8px; background: var(--code-bg); color: var(--code-fg); border-radius: 4px; font-size: 11px; overflow-x: auto; }
+  .tool-card .body .result { padding: 6px 0; font-family: var(--font); font-size: 13px; line-height: 1.5; }
+  .tool-card .body .result.ok { color: var(--fg); }
+  .tool-card .body .result.warn { color: #b45309; }
+  @media (prefers-color-scheme: dark) { .tool-card .body .result.warn { color: #fbbf24; } }
+  .tool-card .body .result.error { color: var(--error); }
+  .tool-card .body .result .dim { color: var(--fg-muted); }
+  .tool-card .body .result code { background: var(--bg-hover); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .tool-card .body .result ol.search-list { margin: 4px 0 0; padding-left: 20px; }
+  .tool-card .body .result ol.search-list li { margin: 2px 0; }
+  .tool-card .body .result ol.search-list a { color: var(--accent); text-decoration: none; }
+  .tool-card .body .result ol.search-list a:hover { text-decoration: underline; }
+
+  /* Subagent card (nested) */
+  .subagent-card { margin-left: 20px; border-left: 2px solid var(--accent); padding-left: 12px; margin-top: 4px; }
+  .subagent-card .head .icon { color: var(--accent); }
+  .subagent-card .child-stream { margin-top: 6px; padding-left: 8px; border-left: 1px dashed var(--border); }
+  .subagent-card .child-event { font-size: 12px; color: var(--fg-muted); padding: 2px 0; font-family: var(--font); }
+  .subagent-card .child-event.tool { color: var(--fg); }
+  .subagent-card .child-event .label { display: inline-block; min-width: 70px; color: var(--fg-subtle); }
+
+  /* Empty state */
+  .empty {
+    margin: auto;
+    text-align: center;
+    color: var(--fg-muted);
+    max-width: 480px;
+    padding: 40px 20px;
+  }
+  .empty h1 { font-size: 28px; font-weight: 600; color: var(--fg); margin: 0 0 12px; letter-spacing: -0.02em; }
+  .empty .grad {
+    background: linear-gradient(135deg, #0070f3 0%, #7928ca 50%, #ff0080 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .empty p { font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
+  .examples { display: flex; flex-direction: column; gap: 8px; }
+  .examples button {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    text-align: left;
+    color: var(--fg);
+    font: inherit; font-size: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .examples button:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+  .examples .label { color: var(--fg-muted); font-size: 12px; margin-bottom: 4px; }
+
+  /* Composer */
+  .composer {
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev);
+    padding: 14px 20px;
+    position: sticky; bottom: 0;
+  }
+  .composer-inner {
+    max-width: 800px; margin: 0 auto;
+    display: flex; gap: 8px; align-items: flex-end;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 6px 6px 6px 14px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .composer-inner:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0,112,243,0.1);
+  }
+  textarea#m {
+    flex: 1; resize: none; border: none; outline: none; background: transparent;
+    color: var(--fg); font: inherit; font-size: 15px;
+    line-height: 1.5; max-height: 180px; min-height: 28px;
+    padding: 8px 0;
+    font-family: var(--font);
+  }
+  textarea#m::placeholder { color: var(--fg-subtle); }
+  .send {
+    width: 36px; height: 36px;
+    border: none; border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-fg);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .send:hover:not(:disabled) { background: var(--accent-hover); }
+  .send:active:not(:disabled) { transform: scale(0.94); }
+  .send:disabled { background: var(--bg-hover); color: var(--fg-subtle); cursor: not-allowed; }
+  .send svg { width: 16px; height: 16px; }
+  .send.stop { background: var(--error); color: #fff; }
+  .send.stop:hover { background: #c00000; }
+
+  .err-bar {
+    max-width: 800px; margin: 8px auto 0;
+    padding: 8px 12px; background: rgba(224,0,0,0.1); color: var(--error);
+    border-radius: var(--radius-md); font-size: 13px;
+    display: none;
+  }
+  .err-bar.show { display: block; }
+
+  /* Markdown elements in assistant bubbles */
+  .row.assistant .bubble h1, .row.assistant .bubble h2, .row.assistant .bubble h3, .row.assistant .bubble h4 {
+    margin: 14px 0 6px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em;
+  }
+  .row.assistant .bubble h1 { font-size: 22px; }
+  .row.assistant .bubble h2 { font-size: 18px; }
+  .row.assistant .bubble h3 { font-size: 16px; }
+  .row.assistant .bubble h4 { font-size: 14px; color: var(--fg-muted); }
+  .row.assistant .bubble p { margin: 6px 0; }
+  .row.assistant .bubble ul, .row.assistant .bubble ol { margin: 6px 0; padding-left: 22px; }
+  .row.assistant .bubble li { margin: 2px 0; }
+  .row.assistant .bubble blockquote {
+    margin: 6px 0; padding: 4px 12px;
+    border-left: 3px solid var(--border-strong);
+    color: var(--fg-muted);
+    background: var(--bg-hover);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+  .row.assistant .bubble hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+  .row.assistant .bubble table {
+    border-collapse: collapse; margin: 8px 0;
+    font-size: 13px; width: 100%; max-width: 700px;
+  }
+  .row.assistant .bubble th, .row.assistant .bubble td {
+    border: 1px solid var(--border); padding: 6px 10px; text-align: left;
+  }
+  .row.assistant .bubble th { background: var(--bg-hover); font-weight: 600; }
+  .row.assistant .bubble a { color: var(--accent); text-decoration: none; }
+  .row.assistant .bubble a:hover { text-decoration: underline; }
+  .row.assistant .bubble code:not(pre code) {
+    background: var(--bg-hover); color: var(--fg);
+    padding: 1px 5px; border-radius: 3px; font-size: 12.5px;
+    font-family: var(--font-mono);
+  }
+  .row.assistant .bubble pre {
+    background: var(--code-bg); color: var(--code-fg);
+    padding: 10px 12px; border-radius: var(--radius-sm);
+    overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+    margin: 6px 0;
+  }
+  .row.assistant .bubble pre code { background: none; padding: 0; color: inherit; }
+  .row.assistant .bubble strong { font-weight: 600; color: var(--fg); }
+  .row.assistant .bubble em { font-style: italic; }
+
+  /* Slash command popover */
+  .slash-menu {
+    position: fixed;
+    left: 50%;
+    bottom: 80px;
+    transform: translateX(-50%);
+    z-index: 20;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    min-width: 360px;
+    max-width: 520px;
+    padding: 4px;
+    font-size: 13px;
+  }
+  .slash-menu[hidden] { display: none !important; }
+  .slash-menu .group-label {
+    font-size: 11px; color: var(--fg-subtle); padding: 6px 10px 2px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .slash-menu .item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 10px; border-radius: var(--radius-sm);
+    cursor: pointer; user-select: none;
+  }
+  .slash-menu .item:hover, .slash-menu .item.active { background: var(--bg-hover); }
+  .slash-menu .item .icon { font-size: 16px; line-height: 1.2; }
+  .slash-menu .item .body { flex: 1; min-width: 0; }
+  .slash-menu .item .title { color: var(--fg); font-weight: 600; }
+  .slash-menu .item .desc { color: var(--fg-muted); font-size: 12px; margin-top: 1px; }
+  .slash-menu .item .kbd { color: var(--fg-subtle); font-family: var(--font-mono); font-size: 11px; align-self: center; }
+
+  /* Slash command chip in user bubble */
+  .bubble .slash-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 6px; border-radius: 4px;
+    background: rgba(0,112,243,0.12); color: var(--accent);
+    font-family: var(--font-mono); font-size: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    .bubble .slash-chip { background: rgba(59,158,255,0.18); }
+  }
+  .bubble .subagent-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 6px; border-radius: 4px;
+    background: rgba(121,40,202,0.12); color: #7928ca;
+    font-family: var(--font-mono); font-size: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    .bubble .subagent-chip { background: rgba(121,40,202,0.22); color: #c084fc; }
+  }
+
+  /* Mobile */
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; }
+    #log { padding: 20px 12px; }
+    .composer { padding: 10px 12px; }
+    .row { gap: 8px; }
+    .bubble { max-width: 85%; font-size: 14px; }
+    .empty h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">e</div>
+  <div class="title">
+    <b>eve-mini-agent</b>
+    <span>minimax · MiniMax-M3</span>
+  </div>
+  <div id="status" class="status" data-s="ready"><span class="dot"></span><span id="status-text">Ready</span></div>
+</header>
+
+<div id="log">
+  <div class="empty" id="empty">
+    <h1>与 <span class="grad">eve</span> 开始对话</h1>
+    <p>框架 <b>Vercel Eve</b> · 模型 <b>minimax MiniMax-M3</b> · 直连 <code>api.minimaxi.com</code></p>
+
+    <div class="examples">
+      <div class="label">⌨ 斜杠命令（在输入框打 / 触发菜单）</div>
+      <button data-q="/code-review " data-slash="code-review">📋 /code-review — 代码审查 skill</button>
+      <button data-q="/sql-helper " data-slash="sql-helper">🗃 /sql-helper — SQL 生成 skill</button>
+      <button data-q="/coder " data-slash="coder">🧑‍💻 /coder — 派发给 coder 子 agent</button>
+      <button data-q="/researcher " data-slash="researcher">🧑‍🔬 /researcher — 派发给 researcher 子 agent</button>
+      <button data-q="/help" data-slash="help">❓ /help — 列出所有命令</button>
+    </div>
+
+    <div class="examples">
+      <div class="label">💬 普通聊天（自由对话，模型自己挑工具）</div>
+      <button data-q="上海现在天气怎么样？">🌤 上海现在天气？</button>
+      <button data-q="查一下上海、北京、深圳、东京、纽约这 5 个城市天气">🌍 5 城市天气汇总</button>
+      <button data-q="用 read_url 抓 https://www.rust-lang.org/ 告诉我 3 个卖点">🔗 抓 rust-lang.org 卖点</button>
+      <button data-q="用 read_url 抓 https://example.com/ 告诉我页面内容">🚫 试抓非白名单</button>
+      <button data-q="用 web_search 查 Rust 最新版本号">🔍 搜 Rust 最新版</button>
+    </div>
+  </div>
+</div>
+
+<div class="slash-menu" id="slash-menu" hidden></div>
+<div class="composer">
+  <form id="f" class="composer-inner" autocomplete="off">
+    <textarea id="m" rows="1" placeholder="发消息…或输入 / 调技能   (Enter 发送, Shift+Enter 换行)" autofocus></textarea>
+    <button id="b" class="send" type="submit" aria-label="发送">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+    </button>
+  </form>
+  <div id="err" class="err-bar"></div>
+</div>
+
+<script>
+const log = document.getElementById('log');
+const empty = document.getElementById('empty');
+const form = document.getElementById('f');
+const m = document.getElementById('m');
+const b = document.getElementById('b');
+const status = document.getElementById('status');
+const statusText = document.getElementById('status-text');
+const errEl = document.getElementById('err');
+
+let sid = null, ctoken = null, abortCtrl = null, busy = false;
+let currentRun = null; // { botEl, text, isStreaming, isThinking }
+
+function setStatus(s, text) {
+  status.dataset.s = s;
+  statusText.textContent = text || ({
+    ready: 'Ready', thinking: 'Thinking…', streaming: 'Streaming', tools: 'Calling tool…', err: 'Error'
+  })[s] || s;
+}
+function showErr(msg) { errEl.textContent = msg; errEl.classList.add('show'); }
+function clearErr() { errEl.textContent = ''; errEl.classList.remove('show'); }
+
+function hideEmpty() {
+  if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+}
+
+function makeRow(role) {
+  const row = document.createElement('div');
+  row.className = 'row ' + role;
+  if (role === 'user') {
+    const av = document.createElement('div'); av.className = 'avatar'; av.textContent = '你';
+    const b = document.createElement('div'); b.className = 'bubble';
+    row.appendChild(b);
+    row.appendChild(av);
+    return { row, bubble: b };
+  } else {
+    const av = document.createElement('div'); av.className = 'avatar'; av.textContent = 'M';
+    const b = document.createElement('div'); b.className = 'bubble';
+    row.appendChild(av);
+    row.appendChild(b);
+    return { row, bubble: b };
+  }
+}
+
+function makeThinkingRow() {
+  const { row, bubble } = makeRow('assistant');
+  bubble.className = 'bubble';
+  bubble.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+  if (!document.getElementById('thinking-style')) {
+    const s = document.createElement('style');
+    s.id = 'thinking-style';
+    s.textContent = `.bubble .dots i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--fg-muted);margin:0 2px;animation:dot-bounce 1.2s ease-in-out infinite}
+    .bubble .dots i:nth-child(2){animation-delay:.15s}
+    .bubble .dots i:nth-child(3){animation-delay:.3s}
+    @keyframes dot-bounce{0%,80%,100%{transform:scale(.6);opacity:.5}40%{transform:scale(1);opacity:1}}`;
+    document.head.appendChild(s);
+  }
+  log.appendChild(row);
+  scrollDown();
+  return { row, bubble };
+}
+
+// 给每个工具一个图标 + 头摘要
+const TOOL_META = {
+  get_weather:  { icon: "🌤", verb: "查天气", head: (i) => `${i.city || "?"}` },
+  get_time:     { icon: "🕐", verb: "查时间", head: (i) => `${i.timezone || "本地时区"}` },
+  web_search:   { icon: "🔍", verb: "搜索",   head: (i) => `"${(i.query || "").slice(0, 30)}"` },
+  read_url:     { icon: "🔗", verb: "抓页面", head: (i) => `${i.url || ""}` },
+  load_skill:   { icon: "📋", verb: "加载技能", head: (i) => `${i.skill || i.name || ""}` },
+  bash:         { icon: "💻", verb: "执行命令", head: (i) => `${(i.command || "").slice(0, 40)}` },
+  read_file:    { icon: "📄", verb: "读文件", head: (i) => `${i.path || ""}` },
+  write_file:   { icon: "✏️", verb: "写文件", head: (i) => `${i.path || ""}` },
+  glob:         { icon: "🔎", verb: "glob",  head: (i) => `${i.pattern || ""}` },
+  grep:         { icon: "🔎", verb: "grep",  head: (i) => `${i.pattern || ""}` },
+  web_fetch:    { icon: "🌐", verb: "fetch", head: (i) => `${i.url || ""}` },
+};
+// 子 agent 触发时, toolName 是 "agent"（内置）或 "<sub>"（声明式）
+function metaFor(name) {
+  return TOOL_META[name] || { icon: "⚙", verb: "调工具", head: () => "" };
+}
+
+function makeToolCard(name, input) {
+  const card = document.createElement("div");
+  const meta = metaFor(name);
+  card.className = "tool-card collapsed";
+  card.dataset.tool = name;
+  card.innerHTML = `
+    <div class="head">
+      <span class="icon">${meta.icon}</span>
+      <span class="verb">${escapeHtml(meta.verb)}</span>
+      <span class="name">${escapeHtml(meta.head(input || {}))}</span>
+      <span class="status">…</span>
+      <span class="arrow">▾</span>
+    </div>
+    <div class="body">
+      <details class="raw">
+        <summary>input</summary>
+        <pre>${escapeHtml(JSON.stringify(input ?? {}, null, 2))}</pre>
+      </details>
+      <div class="result-slot"></div>
+    </div>`;
+  card.querySelector(".head").addEventListener("click", () => {
+    card.classList.toggle("collapsed");
+    card.querySelector(".arrow").textContent = card.classList.contains("collapsed") ? "▾" : "▴";
+  });
+  return card;
+}
+
+// 工具输出专属摘要
+function renderResult(name, output) {
+  if (output == null) return "";
+  const err = output.error;
+  if (err) return `<div class="result error">⚠ ${escapeHtml(String(err).slice(0, 200))}</div>`;
+  switch (name) {
+    case "get_weather": {
+      if (output.tempC != null) {
+        return `<div class="result ok">${escapeHtml(output.resolved || output.city || "")} · <b>${output.tempC}°C</b> 体感 ${output.feelsLikeC ?? "?"}°C · ${escapeHtml(output.desc || "")} · 湿度 ${output.humidity ?? "?"}%</div>`;
+      }
+      break;
+    }
+    case "get_time": {
+      if (output.local) {
+        return `<div class="result ok">${escapeHtml(output.timezone)} · <b>${escapeHtml(output.local)}</b></div>`;
+      }
+      break;
+    }
+    case "read_url": {
+      if (output.markdown) {
+        const preview = output.markdown.replace(/\n+/g, " ").slice(0, 180);
+        return `<div class="result ok">📰 <b>${escapeHtml(output.title || output.url)}</b><br><span class="dim">${escapeHtml(preview)}…</span></div>`;
+      }
+      break;
+    }
+    case "web_search": {
+      if (Array.isArray(output.results) && output.results.length) {
+        const top = output.results.slice(0, 3)
+          .map(r => `<li><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a></li>`).join("");
+        return `<div class="result ok">找到 ${output.count} 条：<ol class="search-list">${top}</ol></div>`;
+      }
+      if (output.count === 0) {
+        return `<div class="result warn">⚠ ${escapeHtml(output.error || "0 条结果")}</div>`;
+      }
+      break;
+    }
+    case "load_skill": {
+      return `<div class="result ok">已加载 <code>${escapeHtml(output.skill || output.name || "")}</code></div>`;
+    }
+  }
+  // 兜底：截断 JSON
+  const s = JSON.stringify(output);
+  return `<div class="result raw-fallback">${escapeHtml(s.length > 300 ? s.slice(0, 300) + "…" : s)}</div>`;
+}
+
+function appendToolResult(name, result) {
+  // 找到最近的同名未 done 卡片
+  const cards = Array.from(log.querySelectorAll(`.tool-card:not(.done)[data-tool="${CSS.escape(name)}"]`));
+  const card = cards[cards.length - 1];
+  if (!card) return;
+  card.classList.add("done");
+  // 状态
+  const st = card.querySelector(".status");
+  if (st) {
+    const isErr = !!(result && result.isError) || (result && result.output && result.output.error);
+    st.textContent = isErr ? "✗" : "✓";
+    st.className = "status " + (isErr ? "err" : "ok");
+  }
+  // 结果摘要
+  const slot = card.querySelector(".result-slot");
+  if (slot && result) {
+    const output = result.output ?? result;
+    slot.innerHTML = renderResult(name, output);
+  }
+  // 展开
+  card.classList.remove("collapsed");
+  const arrow = card.querySelector(".arrow");
+  if (arrow) arrow.textContent = "▴";
+  scrollDown();
+}
+
+// ============ Subagent 可视化 ============
+const subagentCards = new Map(); // callId → card element
+
+function makeSubagentCard(name, callId, input) {
+  const card = document.createElement("div");
+  card.className = "tool-card subagent-card collapsed";
+  card.dataset.callId = callId;
+  const meta = metaFor(name);
+  const msg = (input && (input.message || input.task)) || "";
+  card.innerHTML = `
+    <div class="head">
+      <span class="icon">🧑‍💻</span>
+      <span class="verb">派发到子 agent</span>
+      <span class="name">${escapeHtml(name)} · <span class="dim">${escapeHtml(msg.slice(0, 50))}…</span></span>
+      <span class="status">…</span>
+      <span class="arrow">▾</span>
+    </div>
+    <div class="body">
+      <div class="child-stream"></div>
+    </div>`;
+  card.querySelector(".head").addEventListener("click", () => {
+    card.classList.toggle("collapsed");
+    card.querySelector(".arrow").textContent = card.classList.contains("collapsed") ? "▾" : "▴";
+  });
+  return card;
+}
+
+function appendChildEvent(card, text, kind) {
+  const stream = card.querySelector(".child-stream");
+  if (!stream) return;
+  const div = document.createElement("div");
+  div.className = "child-event " + (kind || "");
+  div.textContent = text;
+  stream.appendChild(div);
+  // 只保留最近 12 条
+  while (stream.children.length > 12) stream.removeChild(stream.firstChild);
+  scrollDown();
+}
+
+function markSubagentDone(callId, ok) {
+  const card = subagentCards.get(callId);
+  if (!card) return;
+  const st = card.querySelector(".status");
+  if (st) {
+    st.textContent = ok ? "✓" : "✗";
+    st.className = "status " + (ok ? "ok" : "err");
+  }
+  card.classList.remove("collapsed");
+  const arrow = card.querySelector(".arrow");
+  if (arrow) arrow.textContent = "▴";
+}
+
+// 订阅子 session 的流，把子 agent 的 tool 调 / 回复渲染到父卡片
+async function subscribeChild(childSessionId, card) {
+  try {
+    const r = await fetch("/eve/v1/session/" + childSessionId + "/stream", {
+      signal: abortCtrl ? abortCtrl.signal : undefined,
+    });
+    if (!r.ok) {
+      appendChildEvent(card, "✗ 无法订阅子 agent 流 (HTTP " + r.status + ")", "err");
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === "actions.requested") {
+            for (const a of (ev.data?.actions || [])) {
+              appendChildEvent(card, "→ " + a.toolName, "tool");
+            }
+          } else if (ev.type === "message.appended") {
+            const sofar = ev.data?.messageSoFar || "";
+            if (sofar.length > 0 && sofar.length % 40 < 2) {
+              appendChildEvent(card, "… " + sofar.slice(-30), "");
+            }
+          } else if (ev.type === "turn.completed") {
+            appendChildEvent(card, "↳ 子 agent 完成", "");
+            return;
+          } else if (ev.type === "session.failed") {
+            appendChildEvent(card, "✗ 子 agent 失败: " + (ev.data?.error?.message || "?"), "err");
+            return;
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      appendChildEvent(card, "✗ 流中断: " + e.message, "err");
+    }
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Lightweight markdown-ish renderer: code fences, inline code, bold, links
+// 完整 markdown 渲染（无依赖，原生实现）
+// 支持：fenced code, inline code, bold, italic, links, h1-h4, ul/ol, GFM 表格, 引用, 分隔线
+function renderText(text) {
+  if (!text) return "";
+  // 1) 抽取 code fence (优先级最高，里面内容原样保留)
+  const fences = [];
+  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
+    const i = fences.length;
+    fences.push({ lang: lang || "", code: code.replace(/\n$/, "") });
+    return `\u0000FENCE${i}\u0000`;
+  });
+  // 2) 抽取行内 code
+  const codes = [];
+  text = text.replace(/`([^`\n]+)`/g, (m, c) => {
+    const i = codes.length;
+    codes.push(c);
+    return `\u0000CODE${i}\u0000`;
+  });
+  // 3) 整段 escape
+  text = escapeHtml(text);
+  // 4) GFM 表格（≥ 2 行：header | separator | data）
+  text = text.replace(/(^|\n)(\|.+\|)\n(\|[-: |]+\|)\n((?:\|.*\n?)*)/g, (m, pre, header, sep, body) => {
+    const splitRow = (r) => r.trim().replace(/^\||\|$/g, "").split("\|").map(c => c.trim());
+    const heads = splitRow(header);
+    const rows = body.trim().split("\n").map(splitRow);
+    let h = "<tr>" + heads.map(c => `<th>${c}</th>`).join("") + "</tr>";
+    let b = rows.map(r => "<tr>" + r.map(c => `<td>${c}</td>`).join("") + "</tr>").join("");
+    return `${pre}<table>${h}${b}</table>`;
+  });
+  // 5) 分隔线
+  text = text.replace(/(^|\n)---+(\n|$)/g, "$1<hr>$2");
+  // 6) heading (h1-h4)
+  text = text.replace(/(^|\n)(#{1,4}) +([^\n]+)/g, (m, pre, h, t) => `${pre}<h${h.length}>${t}</h${h.length}>`);
+  // 7) 引用
+  text = text.replace(/(^|\n)> +([^\n]+)/g, "$1<blockquote>$2</blockquote>");
+  // 8) 列表（ul: - / * ；ol: 数字.）
+  //    用 "\\n- x" / "\\n1. x" 触发；支持嵌套缩进
+  const lines = text.split("\n");
+  const out = [];
+  let inUl = false, inOl = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const ul = /^(\s*)[-*] +/.exec(l);
+    const ol = /^(\s*)(\d+)\. +/.exec(l);
+    if (ul) {
+      if (inOl) { out.push("</ol>"); inOl = false; }
+      if (!inUl) { out.push("<ul>"); inUl = true; }
+      out.push(l.replace(/^(\s*)[-*] +/, "<li>") + "</li>");
+    } else if (ol) {
+      if (inUl) { out.push("</ul>"); inUl = false; }
+      if (!inOl) { out.push("<ol>"); inOl = true; }
+      out.push(l.replace(/^(\s*)\d+\. +/, "<li>") + "</li>");
+    } else {
+      if (inUl) { out.push("</ul>"); inUl = false; }
+      if (inOl) { out.push("</ol>"); inOl = false; }
+      out.push(l);
+    }
+  }
+  if (inUl) out.push("</ul>");
+  if (inOl) out.push("</ol>");
+  text = out.join("\n");
+  // 9) 链接 [text](url)
+  text = text.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (m, t, u) =>
+    `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+  // 10) 自动识别裸 URL
+  text = text.replace(/(?<!["'>=])((https?:\/\/[^\s<]+))/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  // 11) bold / italic
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  // 12) 双换行 -> </p><p>；单换行 -> <br>（段落内换行）
+  text = text.replace(/\n{2,}/g, "</p><p>");
+  text = text.replace(/\n/g, "<br>");
+  text = "<p>" + text + "</p>";
+  text = text.replace(/<p><(h\d|ul|ol|table|blockquote|hr|pre)/g, "<$1");
+  text = text.replace(/<\/(h\d|ul|ol|table|blockquote|hr|pre)><\/p>/g, "</$1>");
+  // 13) 还原 inline code
+  text = text.replace(/\u0000CODE(\d+)\u0000/g, (m, i) => `<code>${escapeHtml(codes[Number(i)])}</code>`);
+  // 14) 还原 code fence
+  text = text.replace(/<p>\u0000FENCE(\d+)\u0000<\/p>/g, (m, i) => {
+    const f = fences[Number(i)];
+    return `<pre><code class="lang-${escapeHtml(f.lang)}">${escapeHtml(f.code)}</code></pre>`;
+  });
+  text = text.replace(/\u0000FENCE(\d+)\u0000/g, (m, i) => {
+    const f = fences[Number(i)];
+    return `<pre><code class="lang-${escapeHtml(f.lang)}">${escapeHtml(f.code)}</code></pre>`;
+  });
+  return text;
+}
+
+function scrollDown() {
+  log.scrollTop = log.scrollHeight;
+}
+
+function autosize() {
+  m.style.height = 'auto';
+  m.style.height = Math.min(m.scrollHeight, 180) + 'px';
+}
+
+// ============ Slash commands ============
+// 每条命令：
+//   cmd: 输入框 / 后面的关键字
+//   type: "skill" | "subagent" | "help" | "system"
+//   label: 显示名
+//   desc: 描述
+//   icon: emoji
+//   build: (args) => { text: 发给后端的 message, label: 用户气泡里显示的标签 }
+const SLASH_COMMANDS = [
+  { cmd: "code-review", type: "skill", label: "/code-review", desc: "加载 code-review skill：贴代码 → 按流程审查", icon: "📋",
+    build: (a) => ({ text: a ? `请使用 code-review skill 帮我 review 这段代码：\n\n${a}` : "请使用 code-review skill 帮我 review 代码。", label: "/code-review" }) },
+  { cmd: "sql-helper", type: "skill", label: "/sql-helper", desc: "加载 sql-helper skill：自然语言 → SQL", icon: "🗃",
+    build: (a) => ({ text: a ? `请使用 sql-helper skill：${a}` : "请使用 sql-helper skill 写一条 SQL。", label: "/sql-helper" }) },
+  { cmd: "coder", type: "subagent", label: "/coder", desc: "派发到 coder 子 agent（独立审查专家）", icon: "🧑‍💻",
+    build: (a) => ({ text: a || "请审查下面这段代码：\n\n（请把代码贴在这里）", label: "/coder" }) },
+  { cmd: "researcher", type: "subagent", label: "/researcher", desc: "派发到 researcher 子 agent（联网调研）", icon: "🧑‍🔬",
+    build: (a) => ({ text: a || "请帮我研究一个主题。", label: "/researcher" }) },
+  { cmd: "weather", type: "quick", label: "/weather <城市>", desc: "快捷查天气（不调子 agent）", icon: "🌤",
+    build: (a) => ({ text: a ? `${a}现在天气怎么样？` : "上海现在天气怎么样？", label: "/weather" }) },
+  { cmd: "clear", type: "system", label: "/clear", desc: "清空当前对话视图", icon: "🧹",
+    build: () => null },
+  { cmd: "help", type: "system", label: "/help", desc: "显示所有可用斜杠命令", icon: "❓",
+    build: () => null },
+];
+
+const slashMenu = document.getElementById("slash-menu");
+let slashActiveIdx = 0;
+let slashFiltered = [];
+
+function showSlashMenu(filter = "") {
+  const f = filter.toLowerCase();
+  slashFiltered = SLASH_COMMANDS.filter(c => !f || c.cmd.startsWith(f) || c.label.toLowerCase().includes(f));
+  if (!slashFiltered.length) { slashMenu.hidden = true; return; }
+  slashActiveIdx = 0;
+  renderSlashMenu();
+  slashMenu.hidden = false;
+}
+function hideSlashMenu() { slashMenu.hidden = true; }
+function renderSlashMenu() {
+  // 分组：skill / subagent / quick / system
+  const groups = { skill: [], subagent: [], quick: [], system: [] };
+  slashFiltered.forEach((c, i) => { (groups[c.type] = groups[c.type] || []).push({ c, i }); });
+  const groupOrder = ["skill", "subagent", "quick", "system"];
+  const groupNames = { skill: "📋 Skills", subagent: "🧑‍💻 Subagents", quick: "⚡ Quick", system: "🛠 System" };
+  let html = "";
+  let globalIdx = 0;
+  for (const k of groupOrder) {
+    if (!groups[k] || !groups[k].length) continue;
+    html += `<div class="group-label">${groupNames[k]}</div>`;
+    for (const { c, i } of groups[k]) {
+      const isActive = i === slashActiveIdx;
+      html += `<div class="item${isActive ? " active" : ""}" data-i="${i}">
+        <span class="icon">${c.icon}</span>
+        <div class="body">
+          <div class="title">${escapeHtml(c.label)}</div>
+          <div class="desc">${escapeHtml(c.desc)}</div>
+        </div>
+        <span class="kbd">⏎</span>
+      </div>`;
+    }
+  }
+  slashMenu.innerHTML = html;
+  slashMenu.querySelectorAll(".item").forEach(el => {
+    el.addEventListener("click", () => {
+      const i = Number(el.dataset.i);
+      applySlash(slashFiltered[i]);
+    });
+  });
+  slashMenu.querySelector(".item.active")?.scrollIntoView({ block: "nearest" });
+}
+function applySlash(c) {
+  hideSlashMenu();
+  if (c.type === "system") {
+    if (c.cmd === "clear") {
+      // 清空 log 视图（不删后端 session）
+      log.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.innerHTML = "<h1>已清空</h1><p>输入 /help 查看所有命令</p>";
+      log.appendChild(empty);
+      return;
+    }
+    if (c.cmd === "help") {
+      // 直接列命令
+      const lines = SLASH_COMMANDS.map(c => `${c.icon} \`${c.label}\` — ${c.desc}`).join("\n");
+      m.value = ""; autosize();
+      sendText("以下是所有可用的斜杠命令：\n\n" + lines);
+      return;
+    }
+  }
+  // skill / subagent / quick：把 /cmd 替换成构造好的 message，触发 send
+  const args = m.value.replace(/^\/\S+\s*/, "").trim();
+  const built = c.build(args);
+  m.value = ""; autosize();
+  if (built) sendText(built.text, built.label);
+}
+
+m.addEventListener("input", () => {
+  const v = m.value;
+  if (v.startsWith("/") && !v.includes("\n")) {
+    const space = v.indexOf(" ");
+    const query = space === -1 ? v.slice(1) : v.slice(1, space);
+    showSlashMenu(query);
+  } else {
+    hideSlashMenu();
+  }
+});
+m.addEventListener("keydown", (e) => {
+  if (!slashMenu.hidden) {
+    if (e.key === "ArrowDown") { slashActiveIdx = Math.min(slashActiveIdx + 1, slashFiltered.length - 1); renderSlashMenu(); e.preventDefault(); return; }
+    if (e.key === "ArrowUp")   { slashActiveIdx = Math.max(slashActiveIdx - 1, 0); renderSlashMenu(); e.preventDefault(); return; }
+    if (e.key === "Tab" || (e.key === "Enter" && slashFiltered.length)) {
+      applySlash(slashFiltered[slashActiveIdx]);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "Escape") { hideSlashMenu(); e.preventDefault(); return; }
+  }
+});
+document.addEventListener("click", (e) => {
+  if (!slashMenu.contains(e.target) && e.target !== m) hideSlashMenu();
+});
+
+function sendText(text, label) {
+  // label 可选：用户气泡里显示成 chip
+  send(text, label);
+}
+
+async function send(text, label) {
+  if (!text.trim() || busy) return;
+  clearErr();
+  hideEmpty();
+  busy = true; setSendUI(false);
+  setStatus('thinking', 'Sending…');
+
+  // user row
+  const u = makeRow('user');
+  if (label) {
+    // 斜杠命令：以 chip + 真实 message 一起展示
+    const chip = document.createElement("span");
+    chip.className = label.startsWith("/coder") || label.startsWith("/researcher") ? "subagent-chip" : "slash-chip";
+    chip.textContent = label;
+    u.bubble.appendChild(chip);
+    u.bubble.appendChild(document.createTextNode(" " + text));
+  } else {
+    u.bubble.textContent = text;
+  }
+  log.appendChild(u.row);
+  scrollDown();
+
+  // thinking row
+  currentRun = makeThinkingRow();
+
+  abortCtrl = new AbortController();
+  let accText = '';
+  try {
+    const r = await fetch('/eve/v1/session', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ message: text }),
+      signal: abortCtrl.signal
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    sid = j.sessionId; ctoken = j.continuationToken || ctoken;
+
+    const r2 = await fetch('/eve/v1/session/' + sid + '/stream', { signal: abortCtrl.signal });
+    if (!r2.ok) throw new Error('Stream HTTP ' + r2.status);
+    const reader = r2.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    // Remove thinking dots, prepare streaming bubble
+    currentRun.bubble.classList.add('streaming');
+    currentRun.bubble.innerHTML = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (handleEvent(ev, () => accText) === 'done') { try { reader.cancel(); } catch {} break; }
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') showErr(String(e.message || e));
+    setStatus('err', 'Error');
+  } finally {
+    busy = false; setSendUI(true);
+    abortCtrl = null;
+    setStatus('ready', 'Ready');
+    currentRun = null;
+  }
+}
+
+function handleEvent(ev, accTextRef) {
+  switch (ev.type) {
+    case 'session.started':
+      setStatus('thinking', (ev.data?.runtime?.modelId || '').split('/').pop() || 'Ready');
+      break;
+    case 'turn.started':
+    case 'message.received':
+      setStatus('thinking', 'Thinking…');
+      break;
+    case 'step.started':
+      setStatus('thinking', 'Thinking…');
+      break;
+    case 'actions.requested': {
+      // remove thinking dots
+      if (currentRun && currentRun.bubble.classList.contains('streaming')) {
+        // keep streaming bubble, but render tool cards below
+      }
+      const acts = ev.data?.actions || [];
+      for (const a of acts) {
+        const card = makeToolCard(a.toolName, a.input);
+        log.appendChild(card);
+        scrollDown();
+      }
+      if (acts.length) setStatus('tools', 'Calling tool…');
+      break;
+    }
+    case 'action.result': {
+      const r = ev.data?.result;
+      if (r) {
+        const out = r.output ?? r;
+        // 包装成 { output, isError, toolName } 给 appendToolResult
+        appendToolResult(r.toolName, { output: out, isError: !!r.isError });
+      }
+      setStatus('streaming', 'Streaming…');
+      break;
+    }
+    case 'message.appended': {
+      accTextRef.value = ev.data?.messageSoFar ?? (accTextRef.value + (ev.data?.messageDelta || ''));
+      if (currentRun) currentRun.bubble.innerHTML = renderText(accTextRef.value);
+      scrollDown();
+      setStatus('streaming', 'Streaming…');
+      break;
+    }
+    case 'message.completed':
+      if (currentRun) {
+        accTextRef.value = ev.data?.message ?? accTextRef.value;
+        currentRun.bubble.innerHTML = renderText(accTextRef.value);
+        currentRun.bubble.classList.remove('streaming');
+      }
+      break;
+    case 'step.completed':
+    case 'subagent.called': {
+      // 父流里看到的子 agent 派发事件
+      const d = ev.data || {};
+      const callId = d.callId;
+      const toolName = d.toolName || d.name || "agent";
+      const card = makeSubagentCard(toolName, callId, d);
+      log.appendChild(card);
+      subagentCards.set(callId, card);
+      scrollDown();
+      // 并行订阅子 session 流
+      if (d.childSessionId) {
+        subscribeChild(d.childSessionId, card);
+      }
+      setStatus("tools", "Delegating to subagent: " + toolName);
+      break;
+    }
+    case 'subagent.completed': {
+      const callId = ev.data?.callId;
+      const ok = !ev.data?.error;
+      markSubagentDone(callId, ok);
+      if (!ok && callId) {
+        const c = subagentCards.get(callId);
+        if (c) appendChildEvent(c, "✗ " + (ev.data.error?.message || "?"), "err");
+      }
+      setStatus("streaming", "Streaming…");
+      break;
+    }
+    case 'turn.completed':
+      break;
+    case 'session.waiting':
+      setStatus('ready', 'Ready');
+      if (currentRun) currentRun.bubble.classList.remove('streaming');
+      return 'done';
+    case 'error':
+      showErr(ev.data?.message || 'stream error');
+      setStatus('err', 'Error');
+      return 'done';
+  }
+  return null;
+}
+
+function setSendUI(enabled) {
+  m.disabled = !enabled;
+  b.disabled = !enabled;
+  b.classList.toggle('stop', !enabled);
+  // swap icon
+  if (!enabled) {
+    b.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>';
+  } else {
+    b.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>';
+  }
+  if (enabled) m.focus();
+}
+
+form.addEventListener('submit', e => {
+  e.preventDefault();
+  const text = m.value;
+  m.value = '';
+  autosize();
+  if (busy && abortCtrl) {
+    abortCtrl.abort();
+    return;
+  }
+  send(text);
+});
+
+m.addEventListener('input', autosize);
+m.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (busy && abortCtrl) abortCtrl.abort();
+    else form.requestSubmit();
+  }
+});
+
+// examples: 区分 slash 命令 vs 普通 prompt
+document.querySelectorAll('.examples button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const q = btn.dataset.q || '';
+    const slash = btn.dataset.slash;
+    if (slash) {
+      // 把 /cmd 填到输入框里，触发 slash 菜单，用户从菜单选
+      m.value = "/" + slash + (q.includes(" ") ? " " : " ");
+      m.focus();
+      autosize();
+      showSlashMenu(slash);
+    } else {
+      send(q);
+    }
+  });
+});
+
+setStatus('ready', 'Ready');
+</script>
+</body>
+</html>
